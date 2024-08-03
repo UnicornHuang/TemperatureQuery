@@ -1,0 +1,227 @@
+<html><head><base href="https://resources.webdev.com/"><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>AIoT Data Visualization with NLQ</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/3.7.1/chart.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.8.0/sql-wasm.min.js"></script>
+<script src="https://unpkg.com/compromise"></script>
+<style>
+body {
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    margin: 0;
+    padding: 0;
+    background-color: #f0f0f0;
+    color: #333;
+}
+.container {
+    display: flex;
+    padding: 20px;
+    max-width: 1200px;
+    margin: 0 auto;
+}
+.control-panel {
+    flex: 1;
+    background-color: #fff;
+    border-radius: 8px;
+    padding: 20px;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+}
+.chart-container {
+    flex: 2;
+    background-color: #fff;
+    border-radius: 8px;
+    padding: 20px;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+    margin-left: 20px;
+}
+h1, h2 {
+    color: #2c3e50;
+}
+input, button {
+    width: 100%;
+    padding: 10px;
+    margin-bottom: 10px;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+}
+button {
+    background-color: #3498db;
+    color: white;
+    border: none;
+    cursor: pointer;
+    transition: background-color 0.3s;
+}
+button:hover {
+    background-color: #2980b9;
+}
+table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 20px;
+}
+th, td {
+    border: 1px solid #ddd;
+    padding: 8px;
+    text-align: left;
+}
+th {
+    background-color: #f2f2f2;
+}
+#nlqInput {
+    height: 50px;
+}
+</style>
+</head>
+<body>
+<div class="container">
+    <div class="control-panel">
+        <h1>AIoT Data Control Panel</h1>
+        <textarea id="nlqInput" placeholder="Enter your query in natural language (e.g., 'Show temperatures above 50 degrees')"></textarea>
+        <button onclick="processNLQ()">Process Natural Language Query</button>
+        <button onclick="getTop10()">Get First 10 Records</button>
+        <button onclick="getHottest10()">Get Hottest 10 Records</button>
+        <button onclick="getAll()">List All Records</button>
+        <div id="resultTable"></div>
+    </div>
+    <div class="chart-container">
+        <h2>Data Visualization</h2>
+        <canvas id="dataChart"></canvas>
+    </div>
+</div>
+
+<script>
+let db;
+let chart;
+
+// Initialize the database and create table
+async function initDB() {
+    const SQL = await initSqlJs({
+        locateFile: file => `https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.8.0/${file}`
+    });
+    db = new SQL.Database();
+    db.run(`CREATE TABLE aiot (id INTEGER PRIMARY KEY, date TEXT, temperature REAL)`);
+    
+    // Generate 100 random records
+    const stmt = db.prepare(`INSERT INTO aiot (date, temperature) VALUES (?, ?)`);
+    for (let i = 0; i < 100; i++) {
+        const date = new Date(2023, 0, 1 + i).toISOString().split('T')[0];
+        const temperature = Math.random() * 70;
+        stmt.run([date, temperature]);
+    }
+    stmt.free();
+
+    // Show the first 10 records
+    const firstTen = db.exec("SELECT * FROM aiot LIMIT 10")[0].values;
+    console.log("First 10 records:", firstTen);
+    updateTable(firstTen);
+}
+
+// Initialize the chart
+function initChart() {
+    const ctx = document.getElementById('dataChart').getContext('2d');
+    chart = new Chart(ctx, {
+        type: 'line',
+        data: {
+            labels: [],
+            datasets: [{
+                label: 'Temperature',
+                data: [],
+                borderColor: 'rgb(75, 192, 192)',
+                tension: 0.1
+            }]
+        },
+        options: {
+            responsive: true,
+            scales: {
+                y: {
+                    beginAtZero: true,
+                    max: 70
+                }
+            }
+        }
+    });
+}
+
+// Process Natural Language Query
+function processNLQ() {
+    const query = document.getElementById('nlqInput').value;
+    const doc = nlp(query);
+
+    let sqlQuery = "SELECT * FROM aiot WHERE 1=1";
+
+    if (doc.has('above') || doc.has('greater than')) {
+        const temperature = doc.numbers().toNumber()[0];
+        sqlQuery += ` AND temperature > ${temperature}`;
+    } else if (doc.has('below') || doc.has('less than')) {
+        const temperature = doc.numbers().toNumber()[0];
+        sqlQuery += ` AND temperature < ${temperature}`;
+    }
+
+    if (doc.has('hottest')) {
+        sqlQuery += " ORDER BY temperature DESC";
+    } else if (doc.has('coldest')) {
+        sqlQuery += " ORDER BY temperature ASC";
+    }
+
+    if (doc.has('latest')) {
+        sqlQuery += " ORDER BY date DESC";
+    } else if (doc.has('earliest')) {
+        sqlQuery += " ORDER BY date ASC";
+    }
+
+    const limitMatch = query.match(/top (\d+)|first (\d+)|(\d+) records/);
+    if (limitMatch) {
+        const limit = limitMatch[1] || limitMatch[2] || limitMatch[3];
+        sqlQuery += ` LIMIT ${limit}`;
+    }
+
+    const results = db.exec(sqlQuery)[0].values;
+    updateTable(results);
+    updateChart(results);
+}
+
+// Get top 10 function
+function getTop10() {
+    const results = db.exec(`SELECT * FROM aiot ORDER BY id ASC LIMIT 10`)[0].values;
+    updateTable(results);
+    updateChart(results);
+}
+
+// Get hottest 10 function
+function getHottest10() {
+    const results = db.exec(`SELECT * FROM aiot ORDER BY temperature DESC LIMIT 10`)[0].values;
+    updateTable(results);
+    updateChart(results);
+}
+
+// Get all function
+function getAll() {
+    const results = db.exec(`SELECT * FROM aiot`)[0].values;
+    updateTable(results);
+    updateChart(results);
+}
+
+// Update the table with results
+function updateTable(results) {
+    const table = document.getElementById('resultTable');
+    let html = '<table><tr><th>ID</th><th>Date</th><th>Temperature</th></tr>';
+    results.forEach(row => {
+        html += `<tr><td>${row[0]}</td><td>${row[1]}</td><td>${row[2].toFixed(2)}</td></tr>`;
+    });
+    html += '</table>';
+    table.innerHTML = html;
+}
+
+// Update the chart with results
+function updateChart(results) {
+    chart.data.labels = results.map(row => row[1]);
+    chart.data.datasets[0].data = results.map(row => row[2]);
+    chart.update();
+}
+
+// Initialize everything when the page loads
+window.onload = async function() {
+    await initDB();
+    initChart();
+    getTop10(); // Show top 10 data initially
+};
+</script>
+</body>
+</html>
